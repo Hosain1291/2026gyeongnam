@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>2026 경상남도지사 예측 시뮬레이터</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* Body: App-like feel, fixed viewport */
+        body { font-family: 'Pretendard', sans-serif; overflow: hidden; height: 100vh; width: 100vw; background-color: #f1f5f9; }
+        
+        /* Layout */
+        .app-container { height: 100%; display: flex; flex-direction: column; }
+        @media (min-width: 1024px) {
+            .app-container { flex-direction: row; }
+        }
+
+        /* Map Area */
+        .map-wrapper { 
+            position: relative; 
+            width: 100%; 
+            height: 50%; /* Mobile: Increased height for visibility */
+            background-color: #f8fafc; 
+            overflow: hidden; 
+            touch-action: none; /* Critical for smooth D3 zooming on mobile */
+            z-index: 10;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        @media (min-width: 1024px) {
+            .map-wrapper { 
+                height: 100%; 
+                flex-grow: 1; 
+                border-bottom: none;
+            }
+        }
+        
+        .district-path { transition: fill 0.3s ease; cursor: pointer; stroke: #fff; stroke-width: 0.5px; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+        .district-path:hover { stroke: #333; stroke-width: 2px; z-index: 10; filter: brightness(1.1); }
+        
+        /* Sidebar/Dashboard */
+        .sidebar { 
+            width: 100%; 
+            flex-grow: 1; /* Mobile: Sidebar takes remaining space */
+            background: white; 
+            display: flex; 
+            flex-direction: column; 
+            z-index: 20; 
+            box-shadow: 0 -4px 10px -1px rgba(0, 0, 0, 0.1); 
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch; /* Smooth scroll on iOS */
+        }
+        @media (min-width: 1024px) {
+            .sidebar { 
+                width: 420px; 
+                flex-grow: 0;
+                height: 100%; 
+                border-left: 1px solid #e2e8f0; 
+                box-shadow: -4px 0 6px -1px rgba(0, 0, 0, 0.05); 
+            }
+        }
+
+        /* Input Styling */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            opacity: 1;
+        }
+
+        /* Card Styling */
+        .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 1rem; }
+
+        /* Mobile Controls Styling */
+        .map-control-btn {
+            padding: 0.75rem; /* Larger touch target */
+        }
+
+        /* Custom Mobile Tooltip Position */
+        #hover-info {
+            transition: all 0.2s ease;
+        }
+        @media (max-width: 1023px) {
+            /* On mobile, use a bottom banner style */
+            #hover-info {
+                top: auto !important;
+                bottom: 1rem !important;
+                left: 1rem !important;
+                right: 1rem !important;
+                width: auto !important; 
+                max-width: none;
+                transform: translateY(10px);
+                opacity: 0;
+                pointer-events: none;
+                z-index: 100;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            }
+            #hover-info.active {
+                transform: translateY(0);
+                opacity: 1;
+                pointer-events: auto;
+            }
+            /* Legend adjustment for mobile */
+            .map-legend {
+                top: 1rem !important;
+                bottom: auto !important;
+                right: auto !important;
+                left: 50% !important;
+                transform: translateX(-50%);
+                background-color: rgba(255, 255, 255, 0.95) !important;
+                white-space: nowrap;
+                display: flex;
+                flex-direction: row !important;
+                gap: 0.5rem;
+                padding: 0.5rem 0.75rem !important;
+            }
+            .map-legend .legend-title { display: none; }
+            .map-legend .legend-item { margin-bottom: 0 !important; }
+            .map-legend .legend-text { display: none; } /* Show only colors if needed, or compact text */
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+
+    <div class="app-container">
+        
+        <!-- Left Panel: Map -->
+        <main class="map-wrapper" id="map-container">
+            <!-- Map Controls -->
+            <div class="absolute top-4 left-4 z-10 flex flex-col gap-2">
+                <div class="bg-white/90 backdrop-blur rounded-lg shadow border border-slate-200 p-1 flex flex-col">
+                    <button id="zoom-in" class="map-control-btn hover:bg-slate-100 rounded text-slate-600" title="확대">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                    </button>
+                    <button id="zoom-out" class="map-control-btn hover:bg-slate-100 rounded text-slate-600 border-t border-slate-100" title="축소">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path></svg>
+                    </button>
+                    <button id="reset-map" class="map-control-btn hover:bg-slate-100 rounded text-slate-600 border-t border-slate-100" title="초기화">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="map-legend absolute top-4 right-4 lg:top-auto lg:bottom-4 lg:right-4 bg-white/90 backdrop-blur-sm p-3 rounded-lg shadow-md border border-slate-200 z-10 text-xs pointer-events-none flex flex-col gap-1.5">
+                <div class="legend-title font-bold mb-1 text-slate-600">예측 격차</div>
+                <div class="legend-item flex items-center"><div class="w-4 h-4 bg-[#004EA2] mr-1.5 rounded-sm"></div> <span class="text-slate-700">민주 압승</span></div>
+                <div class="legend-item flex items-center"><div class="w-4 h-4 bg-[#6FAefc] mr-1.5 rounded-sm"></div> <span class="text-slate-700">민주 우세</span></div>
+                <div class="legend-item flex items-center"><div class="w-4 h-4 bg-[#E6e6e6] mr-1.5 rounded-sm border border-slate-300"></div> <span class="text-slate-700">경합</span></div>
+                <div class="legend-item flex items-center"><div class="w-4 h-4 bg-[#ff8a8a] mr-1.5 rounded-sm"></div> <span class="text-slate-700">국힘 우세</span></div>
+                <div class="legend-item flex items-center"><div class="w-4 h-4 bg-[#E61E2B] mr-1.5 rounded-sm"></div> <span class="text-slate-700">국힘 압승</span></div>
+            </div>
+
+            <!-- Info Tooltip (Floating) -->
+            <div id="hover-info" class="absolute top-4 right-4 bg-white/95 backdrop-blur shadow-xl rounded-xl p-4 border border-slate-100 w-64 z-20 transform transition-all duration-200 opacity-0 translate-y-[-10px] pointer-events-none hidden lg:block">
+                <h3 id="hi-name" class="text-lg font-bold text-slate-800 border-b border-slate-200 pb-2 mb-2">지역명</h3>
+                <div class="space-y-2">
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="font-bold text-[#004EA2]">민주</span>
+                        <span id="hi-minjoo" class="font-mono font-bold">0.0%</span>
+                    </div>
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="font-bold text-[#E61E2B]">국힘</span>
+                        <span id="hi-kukhim" class="font-mono font-bold">0.0%</span>
+                    </div>
+                    <div class="pt-2 border-t border-slate-100 flex justify-between items-center bg-slate-50 p-1 rounded">
+                        <span class="text-xs text-slate-500">격차</span>
+                        <span id="hi-margin" class="font-bold text-sm">0.0%p</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="map-area" class="w-full h-full cursor-grab active:cursor-grabbing">
+                 <div id="loading" class="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
+                    <svg class="w-10 h-10 mb-2 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                    <span>지도를 불러오는 중...</span>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Panel: Simulator & Stats -->
+        <aside class="sidebar">
+            
+            <!-- Header -->
+            <div class="p-5 border-b border-slate-200 bg-white sticky top-0 z-30">
+                <div class="flex justify-between items-center mb-1">
+                    <h2 class="text-lg lg:text-xl font-extrabold text-slate-900">2026 경상남도지사 예측</h2>
+                    <span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded text-[10px] font-bold border border-indigo-100">나우캐스트</span>
+                </div>
+                <div class="text-xs text-slate-400">여론조사 기반 스윙 시뮬레이션</div>
+            </div>
+
+            <div class="p-4 lg:p-5 space-y-4 lg:space-y-6 pb-20 lg:pb-5">
+                <!-- 1. Input Section -->
+                <div class="stat-card bg-white shadow-sm border-slate-200">
+                    <h3 class="text-sm font-bold text-slate-800 mb-4 flex items-center">
+                        <span class="w-1.5 h-4 bg-slate-800 mr-2 rounded-sm"></span>
+                        여론조사 지지율 입력 (시뮬레이션)
+                    </h3>
+                    
+                    <div class="space-y-4">
+                        <!-- Minjoo Input -->
+                        <div>
+                            <label class="flex justify-between text-xs font-bold text-[#004EA2] mb-1">
+                                <span>더불어민주당</span>
+                                <span id="swing-label-minjoo" class="text-[10px] px-1.5 rounded bg-blue-50">변동 없음</span>
+                            </label>
+                            <div class="relative">
+                                <input type="number" id="input-minjoo" inputmode="decimal" min="0" max="100" step="0.1" value="35.9" 
+                                    class="w-full pl-3 pr-10 py-2 border border-blue-200 rounded-lg text-lg font-bold text-[#004EA2] focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all bg-blue-50/30">
+                                <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-blue-300 font-bold">%</span>
+                            </div>
+                        </div>
+
+                        <!-- Kukhim Input -->
+                        <div>
+                            <label class="flex justify-between text-xs font-bold text-[#E61E2B] mb-1">
+                                <span>국민의힘</span>
+                                <span id="swing-label-kukhim" class="text-[10px] px-1.5 rounded bg-red-50">변동 없음</span>
+                            </label>
+                            <div class="relative">
+                                <input type="number" id="input-kukhim" inputmode="decimal" min="0" max="100" step="0.1" value="34.7" 
+                                    class="w-full pl-3 pr-10 py-2 border border-red-200 rounded-lg text-lg font-bold text-[#E61E2B] focus:outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100 transition-all bg-red-50/30">
+                                <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-red-300 font-bold">%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Result Comparison -->
+                <div class="stat-card">
+                    <h3 class="text-sm font-bold text-slate-800 mb-3 flex items-center">
+                        <span class="w-1.5 h-4 bg-slate-400 mr-2 rounded-sm"></span>
+                        결과 비교 (vs 2022 지선)
+                    </h3>
+                    
+                    <div class="grid grid-cols-2 gap-3 text-center">
+                        <!-- 2022 Results (Fixed) -->
+                        <div class="bg-white p-3 rounded-lg border border-slate-100 shadow-sm">
+                            <div class="text-[10px] text-slate-400 font-bold mb-1">2022년 실제 결과</div>
+                            <div class="flex justify-center items-center gap-2">
+                                <span class="text-xs font-bold text-[#004EA2]">29.4%</span>
+                                <span class="text-[10px] text-slate-300">vs</span>
+                                <span class="text-xs font-bold text-[#E61E2B]">65.7%</span>
+                            </div>
+                        </div>
+                        <!-- Current Input (Dynamic) -->
+                        <div class="bg-white p-3 rounded-lg border border-slate-100 shadow-sm">
+                            <div class="text-[10px] text-indigo-500 font-bold mb-1">현재 예측 (여론조사)</div>
+                            <div class="flex justify-center items-center gap-2">
+                                <span class="text-base font-bold text-[#004EA2]" id="summary-poll-minjoo">35.9%</span>
+                                <span class="text-[10px] text-slate-300">vs</span>
+                                <span class="text-base font-bold text-[#E61E2B]" id="summary-poll-kukhim">34.7%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Landslide Analysis -->
+                <div class="stat-card border-indigo-100 bg-indigo-50/30">
+                    <h3 class="text-sm font-bold text-slate-800 mb-3 flex items-center justify-between">
+                        <div class="flex items-center">
+                            <span class="w-1.5 h-4 bg-indigo-500 mr-2 rounded-sm"></span>
+                            예측 승리 지역 (총 22곳)
+                        </div>
+                        <span class="text-[10px] text-slate-400 font-normal">*압승: 격차 15%p 이상</span>
+                    </h3>
+
+                    <div class="space-y-2">
+                        <!-- Minjoo Row -->
+                        <div class="flex items-center bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                            <div class="w-24 text-xs font-bold text-[#004EA2] pl-1">더불어민주당</div>
+                            <div class="flex-grow flex gap-2 justify-end">
+                                <div class="text-center px-2 border-r border-slate-100">
+                                    <div class="text-[10px] text-slate-400">전체 승리</div>
+                                    <div class="text-lg font-black text-[#004EA2]" id="count-minjoo-win">0</div>
+                                </div>
+                                <div class="text-center px-2 bg-blue-50 rounded min-w-[60px]">
+                                    <div class="text-[10px] text-blue-400 font-bold mt-1">압승 지역</div>
+                                    <div class="text-lg font-black text-[#004EA2]" id="count-minjoo-landslide">0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Kukhim Row -->
+                        <div class="flex items-center bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
+                            <div class="w-24 text-xs font-bold text-[#E61E2B] pl-1">국민의힘</div>
+                            <div class="flex-grow flex gap-2 justify-end">
+                                <div class="text-center px-2 border-r border-slate-100">
+                                    <div class="text-[10px] text-slate-400">전체 승리</div>
+                                    <div class="text-lg font-black text-[#E61E2B]" id="count-kukhim-win">0</div>
+                                </div>
+                                <div class="text-center px-2 bg-red-50 rounded min-w-[60px]">
+                                    <div class="text-[10px] text-red-400 font-bold mt-1">압승 지역</div>
+                                    <div class="text-lg font-black text-[#E61E2B]" id="count-kukhim-landslide">0</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            
+            <div class="p-4 text-[10px] text-slate-400 text-center pb-8">
+                * 지도 확대: PC(휠/더블클릭), 모바일(더블탭)<br>
+                * 압승 기준: 2위 후보와 15%p 이상 격차
+            </div>
+        </aside>
+
+    </div>
+
+    <script>
+        // --- 1. Base Data (Based on Gyeongnam 2026 Poll Prediction & 2022 Actuals) ---
+        // 2022 Actual Totals: M 29.43%, K 65.70%
+        // Nowcast Prediction Totals: M 35.9%, K 34.7%
+        // Initial Swing applied to 2022 data: M +6.47, K -31.00
+        
+        const BASE_MINJOO_POLL = 35.9;
+        const BASE_KUKHIM_POLL = 34.7;
+
+        const ACTUAL_2022_MINJOO = 29.43;
+        const ACTUAL_2022_KUKHIM = 65.70;
+
+        // Base Districts Data (Calculated: 2022 Actual + Initial Swing)
+        // M Swing: +6.47, K Swing: -31.00
+        // Used to initialize the map state matching the 'Poll Prediction'
+        const baseDistricts = [
+            { name: "창원시의창구", m: 32.03, k: 38.38 },
+            { name: "창원시성산구", m: 33.21, k: 29.79 },
+            { name: "창원시마산합포구", m: 30.62, k: 41.51 },
+            { name: "창원시마산회원구", m: 32.62, k: 39.38 },
+            { name: "창원시진해구", m: 36.42, k: 35.01 },
+            { name: "진주시", m: 34.12, k: 37.54 },
+            { name: "통영시", m: 36.72, k: 36.15 },
+            { name: "고성군", m: 33.47, k: 37.66 },
+            { name: "사천시", m: 30.32, k: 40.10 },
+            { name: "김해시", m: 45.34, k: 26.64 },
+            { name: "밀양시", m: 29.74, k: 41.42 },
+            { name: "거제시", m: 44.18, k: 26.61 },
+            { name: "의령군", m: 26.81, k: 40.69 },
+            { name: "함안군", m: 31.19, k: 38.96 },
+            { name: "창녕군", m: 25.82, k: 44.08 },
+            { name: "양산시", m: 42.39, k: 30.04 },
+            { name: "하동군", m: 35.61, k: 32.73 },
+            { name: "남해군", m: 38.35, k: 32.54 },
+            { name: "함양군", m: 31.44, k: 36.32 },
+            { name: "산청군", m: 30.19, k: 38.73 },
+            { name: "거창군", m: 29.08, k: 40.39 },
+            { name: "합천군", m: 23.74, k: 44.00 }
+        ];
+
+        // Map name aliases for SVG matching
+        // Keys match district names in baseDistricts, Values are possible IDs in SVG
+        const nameMap = {
+            "창원시의창구": ["changwon-si uichang-gu", "uichang-gu", "의창구", "uichanggu"],
+            "창원시성산구": ["changwon-si seongsan-gu", "seongsan-gu", "성산구", "seongsangu"],
+            "창원시마산합포구": ["changwon-si masanhappo-gu", "masanhappo-gu", "마산합포구", "masanhappogu"],
+            "창원시마산회원구": ["changwon-si masanhoewon-gu", "masanhoewon-gu", "마산회원구", "masanhoewongu"],
+            "창원시진해구": ["changwon-si jinhae-gu", "jinhae-gu", "진해구", "jinhaegu"],
+            "진주시": ["jinju-si", "jinjusi", "진주시"],
+            "통영시": ["tongyeong-si", "tongyeongsi", "통영시"],
+            "고성군": ["goseong-gun", "goseonggun", "고성군"], // Note: Check against Gangwon Goseong if map covers whole country, but this map is Gyeongnam only
+            "사천시": ["sacheon-si", "sacheonsi", "사천시"],
+            "김해시": ["gimhae-si", "gimhaesi", "김해시"],
+            "밀양시": ["miryang-si", "miryangsi", "밀양시"],
+            "거제시": ["geoje-si", "geojesi", "거제시"],
+            "의령군": ["uiryeong-gun", "uiryeonggun", "의령군"],
+            "함안군": ["haman-gun", "hamangun", "함안군"],
+            "창녕군": ["changnyeong-gun", "changnyeonggun", "창녕군"],
+            "양산시": ["yangsan-si", "yangsansi", "양산시"],
+            "하동군": ["hadong-gun", "hadonggun", "하동군"],
+            "남해군": ["namhae-gun", "namhaegun", "남해군"],
+            "함양군": ["hamyang-gun", "hamyanggun", "함양군"],
+            "산청군": ["sancheong-gun", "sancheonggun", "산청군"],
+            "거창군": ["geochang-gun", "geochanggun", "거창군"],
+            "합천군": ["hapcheon-gun", "hapcheongun", "합천군"]
+        };
+
+        // --- 2. State & Colors ---
+        let currentDistricts = JSON.parse(JSON.stringify(baseDistricts)); // Deep copy
+        
+        // Color Scale (Diverging Blue-Red)
+        const colorScale = d3.scaleThreshold()
+            .domain([-15, -10, -5, -1, 1, 5, 10, 15])
+            .range([
+                "#C62828", // Deep Red (K > 15)
+                "#E53935", // Red (K 10-15)
+                "#EF5350", // Light Red (K 5-10)
+                "#E57373", // Pale Red (K 1-5)
+                "#f3f4f6", // Gray (Close < 1)
+                "#90CAF9", // Pale Blue (M 1-5)
+                "#42A5F5", // Light Blue (M 5-10)
+                "#1E88E5", // Blue (M 10-15)
+                "#1565C0"  // Deep Blue (M > 15)
+            ]);
+
+        function getMargin(d) { return d.m - d.k; }
+
+        // --- 3. Simulator Logic ---
+        const inputMinjoo = document.getElementById('input-minjoo');
+        const inputKukhim = document.getElementById('input-kukhim');
+        
+        function updateSimulation() {
+            // Get values directly from number inputs
+            let targetM = parseFloat(inputMinjoo.value);
+            let targetK = parseFloat(inputKukhim.value);
+
+            // Handle empty or invalid inputs gracefully
+            if (isNaN(targetM)) targetM = 0;
+            if (isNaN(targetK)) targetK = 0;
+
+            // Update Summary Display (Input Echo)
+            document.getElementById('summary-poll-minjoo').textContent = targetM.toFixed(1) + "%";
+            document.getElementById('summary-poll-kukhim').textContent = targetK.toFixed(1) + "%";
+
+            // Calculate Swing (Relative to Base Poll Prediction)
+            const swingM = targetM - BASE_MINJOO_POLL;
+            const swingK = targetK - BASE_KUKHIM_POLL;
+
+            // Update Swing Labels
+            updateSwingLabel('minjoo', swingM);
+            updateSwingLabel('kukhim', swingK);
+
+            // Apply Uniform Swing & Count Stats
+            let minjooWins = 0;
+            let kukhimWins = 0;
+            let minjooLandslides = 0; // Margin > 15
+            let kukhimLandslides = 0; // Margin < -15
+
+            currentDistricts = baseDistricts.map(d => {
+                let newM = d.m + swingM;
+                let newK = d.k + swingK;
+                // Clamp 0-100
+                newM = Math.max(0, Math.min(100, newM));
+                newK = Math.max(0, Math.min(100, newK));
+                
+                const margin = newM - newK;
+                
+                // Count Wins
+                if (margin > 0) minjooWins++;
+                else if (margin < 0) kukhimWins++;
+
+                // Count Landslides (15% threshold)
+                if (margin >= 15) minjooLandslides++;
+                else if (margin <= -15) kukhimLandslides++;
+
+                return {
+                    name: d.name,
+                    m: parseFloat(newM.toFixed(2)),
+                    k: parseFloat(newK.toFixed(2))
+                };
+            });
+
+            // Update Stats UI
+            document.getElementById('count-minjoo-win').textContent = minjooWins;
+            document.getElementById('count-kukhim-win').textContent = kukhimWins;
+            document.getElementById('count-minjoo-landslide').textContent = minjooLandslides;
+            document.getElementById('count-kukhim-landslide').textContent = kukhimLandslides;
+
+            // Re-render Map
+            updateMapColors();
+        }
+
+        function updateSwingLabel(party, swing) {
+            const el = document.getElementById(`swing-label-${party}`);
+            const sign = swing > 0 ? "▲" : (swing < 0 ? "▼" : "");
+            
+            if (Math.abs(swing) < 0.1) {
+                el.textContent = "변동 없음";
+                el.className = "text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500";
+            } else {
+                const colorClass = party === 'minjoo' 
+                    ? (swing >= 0 ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-500") 
+                    : (swing >= 0 ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500");
+                
+                el.textContent = `${sign} ${Math.abs(swing).toFixed(1)}%`;
+                el.className = `text-[10px] px-1.5 py-0.5 rounded font-bold ${colorClass}`;
+            }
+        }
+
+        // Listeners
+        inputMinjoo.addEventListener('input', updateSimulation);
+        inputKukhim.addEventListener('input', updateSimulation);
+
+        // --- 4. Map Implementation with D3 Zoom ---
+        const svgUrl = "https://raw.githubusercontent.com/statgarten/maps/8247e23ded70eb908a61dbe2b3db07599b4a21cc/svg/simple/%EA%B2%BD%EC%83%81%EB%82%A8%EB%8F%84_%EC%8B%9C%EA%B5%B0%EA%B5%AC_%EA%B2%BD%EA%B3%84.svg";
+        let svg, g;
+        
+        // Zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([1, 8])
+            .on("zoom", (event) => {
+                if(g) g.attr("transform", event.transform);
+            });
+
+        d3.xml(svgUrl).then(data => {
+            const mapArea = document.getElementById('map-area');
+            document.getElementById('loading').style.display = 'none';
+            
+            // Create SVG Container
+            svg = d3.select(mapArea).append("svg")
+                .attr("width", "100%")
+                .attr("height", "100%")
+                .attr("viewBox", "0 0 800 600") // Initial guess
+                .call(zoom)
+                .on("dblclick.zoom", null); 
+
+            // Create Group for panning
+            g = svg.append("g");
+            
+            // Import Paths
+            const importedNode = document.importNode(data.documentElement, true);
+            const paths = d3.select(importedNode).selectAll("path, polygon, g");
+            
+            // Try to respect imported ViewBox
+            const importedViewBox = d3.select(importedNode).attr("viewBox");
+            if(importedViewBox) svg.attr("viewBox", importedViewBox);
+
+            paths.each(function() {
+                const node = this.cloneNode(true);
+                g.node().appendChild(node);
+            });
+
+            // Initial Coloring & Data Binding
+            updateMapColors();
+
+            // Zoom Controls
+            d3.select("#zoom-in").on("click", () => svg.transition().duration(500).call(zoom.scaleBy, 1.3));
+            d3.select("#zoom-out").on("click", () => svg.transition().duration(500).call(zoom.scaleBy, 1 / 1.3));
+            d3.select("#reset-map").on("click", () => svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity));
+
+        }).catch(err => console.error("Map Load Error:", err));
+
+        function updateMapColors() {
+            if(!g) return;
+
+            g.selectAll("path, polygon, g").each(function() {
+                const el = d3.select(this);
+                // Identification Logic
+                let rawId = el.attr("id") || el.attr("data-name") || "";
+                if(!rawId && el.select("title").size() > 0) rawId = el.select("title").text(); 
+
+                const cleanId = rawId.toLowerCase().replace(/_/g, "").replace(/\s/g, "");
+                
+                let districtName = null;
+                let matchedData = null;
+
+                for (const [koreanName, aliases] of Object.entries(nameMap)) {
+                    if (aliases.some(alias => cleanId.includes(alias)) || cleanId.includes(koreanName)) {
+                        districtName = koreanName;
+                        matchedData = currentDistricts.find(d => d.name === koreanName);
+                        break;
+                    }
+                }
+
+                if (matchedData) {
+                    const margin = getMargin(matchedData);
+                    el.attr("fill", colorScale(margin))
+                      .attr("class", "district-path")
+                      .attr("data-name", districtName);
+
+                    // Hover Events (PC)
+                    el.on("mouseenter", (e) => {
+                        el.style("filter", "brightness(0.9)");
+                        updateHoverInfo(matchedData);
+                    });
+                    el.on("mouseleave", () => {
+                        el.style("filter", null);
+                    });
+                    
+                    // Mobile Touch Interaction
+                    el.on("touchstart", (e) => {
+                        updateHoverInfo(matchedData);
+                        
+                        const mobileTooltip = document.getElementById('hover-info');
+                        mobileTooltip.classList.add('active');
+                        
+                        clearTimeout(window.tooltipTimeout);
+                        window.tooltipTimeout = setTimeout(() => {
+                             mobileTooltip.classList.remove('active');
+                        }, 3000);
+                    });
+                } else {
+                    el.attr("fill", "#e2e8f0").attr("stroke", "#cbd5e1").attr("pointer-events", "none");
+                }
+            });
+        }
+
+        // --- 6. Tooltip/Info Box Logic ---
+        const hoverInfo = document.getElementById('hover-info');
+        
+        function updateHoverInfo(d) {
+            hoverInfo.classList.remove('hidden', 'opacity-0', 'translate-y-[-10px]');
+            
+            document.getElementById('hi-name').innerText = d.name;
+            document.getElementById('hi-minjoo').innerText = d.m.toFixed(1) + "%";
+            document.getElementById('hi-kukhim').innerText = d.k.toFixed(1) + "%";
+            
+            const margin = getMargin(d);
+            const marginEl = document.getElementById('hi-margin');
+            
+            if (margin > 0) {
+                marginEl.innerText = `민주 +${margin.toFixed(1)}%p`;
+                marginEl.className = "font-bold text-sm text-[#004EA2]";
+            } else {
+                marginEl.innerText = `국힘 +${Math.abs(margin).toFixed(1)}%p`;
+                marginEl.className = "font-bold text-sm text-[#E61E2B]";
+            }
+        }
+
+        // --- Initialize ---
+        updateSimulation();
+
+    </script>
+</body>
+</html>
